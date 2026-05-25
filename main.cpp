@@ -2,6 +2,8 @@
 #include <profileapi.h>
 #include <vector>
 #include <cmath>
+#include <random>
+#include <algorithm>
 
 HWND hWnd;
 
@@ -20,15 +22,29 @@ struct Size {
     float height;
 };
 
+struct Personality {
+    float open;
+    float cons;
+    float extr;
+    float agre;
+    float nevr;
+};
+
+struct Mood {
+    float soci;
+};
+
 std::vector<Position> positions;
 std::vector<Velocity> velocities;
 std::vector<Size> sizes;
-
-std::vector<Position> targets;
+std::vector<Personality> personalities;
+std::vector<Mood> moods;
 
 void UpdateMovement(float delta);
-void AddNPC(Position pos, Velocity vel, Size size);
-void UpdatePathfinding();
+void AddNPC(Position pos, Velocity vel, Size size, Personality pers, Mood mood);
+void UpdatePathfinding(float delta);
+void SociabilityChange(int i, float delta);
+int FindClosest(int i);
 
 LRESULT CALLBACK Wndproc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
     switch (uMsg){
@@ -88,10 +104,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
 
-    AddNPC({200.0f, 100.0f}, {0.0f, 0.0f}, {40.0f, 40.0f});
-    AddNPC({100.0f, 100.0f}, {10000.0f, 5000.0f}, {40.0f, 40.0f});
-    targets.push_back({600.0f, 500.0f});
-    
+    std::mt19937 rng(std::random_device{}());
+    std::normal_distribution<float> dist(0.5f, 0.15f);
+    for(int i = 0; i < 5; i++){                                                     // 3 positions sur x
+        for(int j = 0; j < 3; j++){                                                 // 2 positions sur y
+            Personality p;
+            p.open = std::clamp(dist(rng), 0.0f, 1.0f);
+            p.cons = std::clamp(dist(rng), 0.0f, 1.0f);
+            p.extr = std::clamp(dist(rng), 0.0f, 1.0f);
+            p.agre = std::clamp(dist(rng), 0.0f, 1.0f);
+            p.nevr = std::clamp(dist(rng), 0.0f, 1.0f);
+            AddNPC({i * 200.0f, j * 150.0f}, {0.0f, 0.0f}, {40.0f, 40.0f}, p, {p.extr});
+        }
+    }
+
     // Boucle de jeu
     while(true){
         MSG msg;
@@ -109,17 +135,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             counter = now;
             InvalidateRect(hWnd, NULL, FALSE);
             UpdateMovement(delta);
-            UpdatePathfinding();
+            UpdatePathfinding(delta);
         }
     }
 
     return 0;
 }
 
-void AddNPC(Position pos, Velocity vel, Size size){
+void AddNPC(Position pos, Velocity vel, Size size, Personality pers, Mood mood){
     positions.push_back(pos);
     velocities.push_back(vel);
     sizes.push_back(size);
+    personalities.push_back(pers);
+    moods.push_back(mood);
 }
 
 bool CheckCollision(int i, int j){
@@ -216,15 +244,41 @@ void UpdateMovement(float delta){
     }
 }
 
-void UpdatePathfinding(){
+void UpdatePathfinding(float delta){
+    for(int i = 0; i < positions.size(); i++){
+        int j = FindClosest(i);
+        float dx = positions[j].x - positions[i].x;
+        float dy = positions[j].y - positions[i].y;
+        float longueur = sqrt(dx*dx + dy*dy);
+        if(moods[i].soci > 0.05f){  // Si on a encore de la batterie sociale
+            if(longueur > 50.0f){   // Et qu'on est à plus de 40f du NPC le plus proche
+                velocities[i].vx = (dx / longueur) * 40.0f; // On s'approche à une vitesse de 40f
+                velocities[i].vy = (dy / longueur) * 40.0f;
+                SociabilityChange(i, delta);                // Et on met à jour la batterie sociale
+            } else {                // Si on n'est à 40f ou moins
+                velocities[i].vx = 0.0f;     // On s'arrête
+                velocities[i].vy = 0.0f;
+                SociabilityChange(i, delta); // Et on met à jour la batterie sociale
+            }
+        } else {
+            if(longueur < 50.0f){   // Adapté avec temps de réaction, trait unique
+                velocities[i].vx = (dx / longueur) * -80.0f;
+                velocities[i].vy = (dy / longueur) * -80.0f;
+                SociabilityChange(i, delta);
+            }
+        }
+    }
+
+    /*
     if(targets.size() != 0 && positions.size() != 0){
+        targets[0] = positions[1];
         float dx = targets[0].x - positions[0].x;
         float dy = targets[0].y - positions[0].y;
         float longueur = sqrt(dx*dx + dy*dy);
 
         if(longueur > 5.0f){
-            velocities[0].vx = (dx / longueur) * 10.0f;
-            velocities[0].vy = (dy / longueur) * 10.0f;
+            velocities[0].vx = (dx / longueur) * 80.0f;
+            velocities[0].vy = (dy / longueur) * 80.0f;
         } else {
             velocities[0].vx = 0.0f;
             velocities[0].vy = 0.0f;
@@ -234,6 +288,38 @@ void UpdatePathfinding(){
     for(int i = 0; i < positions.size(); i++){
         for(int j = i + 1; j < positions.size(); j++){
             CheckCollision(i, j);
+        }
+    }*/
+}
+
+int FindClosest(int i){
+    float minDist = 100000.0f;
+    int closest = -1;
+    for(int j = 0; j < positions.size(); j++){
+        if(j != i){
+            float dx = positions[j].x - positions[i].x;
+            float dy = positions[j].y - positions[i].y;
+            float longueur = sqrt(dx*dx + dy*dy);
+            if(longueur < minDist){
+                minDist = longueur;
+                closest = j;
+            }
+        }
+    }
+    return closest;
+}
+
+void SociabilityChange(int i, float delta){
+    float extraversion = personalities[i].extr;
+
+    // For now, only checks if the NPC is standing still, aka interacting at this stage of development
+    if(abs(velocities[i].vx) <= 1.0f && abs(velocities[i].vy) <= 1.0f){         // Si on est exrêmement lent ou à l'arrêt
+        moods[i].soci -= 0.05f * delta;      // 0.1f devrait être différent selon les traits des NPC (débit de batterie sociale)
+        moods[i].soci = std::clamp(moods[i].soci, 0.0f, personalities[i].extr); // On réduit la batterie sociale en restant entre 0 et le seuil max
+    } else {                                                                    // Si on est en mouvement
+        if(moods[i].soci < personalities[i].extr){                              // Si la batterie sociale est en dessous du seuil max
+            moods[i].soci += 0.05f * delta;
+            moods[i].soci = std::clamp(moods[i].soci, 0.0f, personalities[i].extr); // On augmente la batterie en restant entre 0 et le seuil max
         }
     }
 }
