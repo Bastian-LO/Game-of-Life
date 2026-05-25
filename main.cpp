@@ -34,14 +34,23 @@ struct Mood {
     float soci;
 };
 
+struct Activity{
+    bool talk;
+};
+
+struct CurrentTasks {
+    std::vector<Activity> activities;
+};
+
 std::vector<Position> positions;
 std::vector<Velocity> velocities;
 std::vector<Size> sizes;
 std::vector<Personality> personalities;
 std::vector<Mood> moods;
+std::vector<CurrentTasks> currentTasks;
 
 void UpdateMovement(float delta);
-void AddNPC(Position pos, Velocity vel, Size size, Personality pers, Mood mood);
+void AddNPC(Position pos, Velocity vel, Size size, Personality pers, Mood mood, CurrentTasks currTasks);
 void UpdatePathfinding(float delta);
 void SociabilityChange(int i, float delta);
 int FindClosest(int i);
@@ -114,7 +123,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             p.extr = std::clamp(dist(rng), 0.0f, 1.0f);
             p.agre = std::clamp(dist(rng), 0.0f, 1.0f);
             p.nevr = std::clamp(dist(rng), 0.0f, 1.0f);
-            AddNPC({i * 200.0f, j * 150.0f}, {0.0f, 0.0f}, {40.0f, 40.0f}, p, {p.extr});
+            Activity act;
+            act.talk = false;
+            std::vector<Activity> activities;
+            activities.push_back(act);
+            CurrentTasks currTasks;
+            currTasks.activities = activities;
+            AddNPC({i * 200.0f, j * 150.0f}, {0.1f, 0.1f}, {40.0f, 40.0f}, p, {p.extr}, currTasks);
         }
     }
 
@@ -142,12 +157,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     return 0;
 }
 
-void AddNPC(Position pos, Velocity vel, Size size, Personality pers, Mood mood){
+void AddNPC(Position pos, Velocity vel, Size size, Personality pers, Mood mood, CurrentTasks currTasks){
     positions.push_back(pos);
     velocities.push_back(vel);
     sizes.push_back(size);
     personalities.push_back(pers);
     moods.push_back(mood);
+    currentTasks.push_back(currTasks);
 }
 
 bool CheckCollision(int i, int j){
@@ -250,23 +266,22 @@ void UpdatePathfinding(float delta){
         float dx = positions[j].x - positions[i].x;
         float dy = positions[j].y - positions[i].y;
         float longueur = sqrt(dx*dx + dy*dy);
-        if(moods[i].soci > 0.05f){  // Si on a encore de la batterie sociale
-            if(longueur > 50.0f){   // Et qu'on est à plus de 40f du NPC le plus proche
-                velocities[i].vx = (dx / longueur) * 40.0f; // On s'approche à une vitesse de 40f
+        if(moods[i].soci > 0.2f){                           // Si on a encore de la batterie sociale
+            if(longueur > 50.0f){                           // Et qu'on n'est pas assez proche du plus proche
+                velocities[i].vx = (dx / longueur) * 40.0f; // On se rapproche à une vitesse de 40f
                 velocities[i].vy = (dy / longueur) * 40.0f;
-                SociabilityChange(i, delta);                // Et on met à jour la batterie sociale
-            } else {                // Si on n'est à 40f ou moins
-                velocities[i].vx = 0.0f;     // On s'arrête
+                currentTasks[i].activities[0].talk = false;
+            } else {                                        // Si on est assez proche
+                velocities[i].vx = 0.0f;                    // On s'arrête
                 velocities[i].vy = 0.0f;
-                SociabilityChange(i, delta); // Et on met à jour la batterie sociale
+                currentTasks[i].activities[0].talk = true;
             }
-        } else {
-            if(longueur < 50.0f){   // Adapté avec temps de réaction, trait unique
-                velocities[i].vx = (dx / longueur) * -80.0f;
-                velocities[i].vy = (dy / longueur) * -80.0f;
-                SociabilityChange(i, delta);
-            }
+        } else {                                            // Si on n'a plus de batterie sociale
+            velocities[i].vx = (dx / longueur) * -80.0f;    // ON FUIT
+            velocities[i].vy = (dy / longueur) * -80.0f;
+            currentTasks[i].activities[0].talk = false;
         }
+        SociabilityChange(i, delta);
     }
 
     /*
@@ -312,13 +327,12 @@ int FindClosest(int i){
 void SociabilityChange(int i, float delta){
     float extraversion = personalities[i].extr;
 
-    // For now, only checks if the NPC is standing still, aka interacting at this stage of development
-    if(abs(velocities[i].vx) <= 1.0f && abs(velocities[i].vy) <= 1.0f){         // Si on est exrêmement lent ou à l'arrêt
-        moods[i].soci -= 0.05f * delta;      // 0.1f devrait être différent selon les traits des NPC (débit de batterie sociale)
+    if(currentTasks[i].activities[0].talk){
+        moods[i].soci -= 0.01f * delta;      // 0.1f devrait être différent selon les traits des NPC (débit de batterie sociale)
         moods[i].soci = std::clamp(moods[i].soci, 0.0f, personalities[i].extr); // On réduit la batterie sociale en restant entre 0 et le seuil max
     } else {                                                                    // Si on est en mouvement
         if(moods[i].soci < personalities[i].extr){                              // Si la batterie sociale est en dessous du seuil max
-            moods[i].soci += 0.05f * delta;
+            moods[i].soci += 0.01f * delta;
             moods[i].soci = std::clamp(moods[i].soci, 0.0f, personalities[i].extr); // On augmente la batterie en restant entre 0 et le seuil max
         }
     }
