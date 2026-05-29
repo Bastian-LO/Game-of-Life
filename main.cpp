@@ -49,11 +49,17 @@ std::vector<Personality> personalities;
 std::vector<Mood> moods;
 std::vector<CurrentTasks> currentTasks;
 
+std::mt19937 rng(std::random_device{}());
+std::normal_distribution<float> random_vx(0.0f, 40.0f);
+std::normal_distribution<float> random_vy(0.0f, 40.0f);
+std::uniform_real_distribution<float> random_positive_negative_percent(-1.0f, 1.0f);
+
 void UpdateMovement(float delta);
 void AddNPC(Position pos, Velocity vel, Size size, Personality pers, Mood mood, CurrentTasks currTasks);
 void UpdatePathfinding(float delta);
 void SociabilityChange(int i, float delta);
 int FindClosest(int i);
+void Wander(int i, float delta);
 
 LRESULT CALLBACK Wndproc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam){
     switch (uMsg){
@@ -113,23 +119,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
 
-    std::mt19937 rng(std::random_device{}());
-    std::normal_distribution<float> dist(0.5f, 0.15f);
+    std::normal_distribution<float> stat(0.5f, 0.15f);
+    std::uniform_real_distribution<float> dist_x(0.0f, 760.0f);
+    std::uniform_real_distribution<float> dist_y(0.0f, 560.0f);
     for(int i = 0; i < 5; i++){                                                     // 3 positions sur x
         for(int j = 0; j < 3; j++){                                                 // 2 positions sur y
             Personality p;
-            p.open = std::clamp(dist(rng), 0.0f, 1.0f);
-            p.cons = std::clamp(dist(rng), 0.0f, 1.0f);
-            p.extr = std::clamp(dist(rng), 0.0f, 1.0f);
-            p.agre = std::clamp(dist(rng), 0.0f, 1.0f);
-            p.nevr = std::clamp(dist(rng), 0.0f, 1.0f);
+            p.open = std::clamp(stat(rng), 0.0f, 1.0f);
+            p.cons = std::clamp(stat(rng), 0.0f, 1.0f);
+            p.extr = std::clamp(stat(rng), 0.0f, 1.0f);
+            p.agre = std::clamp(stat(rng), 0.0f, 1.0f);
+            p.nevr = std::clamp(stat(rng), 0.0f, 1.0f);
+
+            float pos_x = dist_x(rng);
+            float pos_y = dist_y(rng);
+
             Activity act;
             act.talk = false;
             std::vector<Activity> activities;
             activities.push_back(act);
             CurrentTasks currTasks;
             currTasks.activities = activities;
-            AddNPC({i * 200.0f, j * 150.0f}, {0.1f, 0.1f}, {40.0f, 40.0f}, p, {p.extr}, currTasks);
+            AddNPC({pos_x, pos_y}, {random_vx(rng), random_vx(rng)}, {40.0f, 40.0f}, p, {p.extr}, currTasks);
         }
     }
 
@@ -147,6 +158,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
             LARGE_INTEGER now;
             QueryPerformanceCounter(&now);
             float delta = (float) (now.QuadPart - counter.QuadPart) / frequency.QuadPart;
+            SetWindowTextA(hWnd, std::to_string(delta).c_str());
             counter = now;
             InvalidateRect(hWnd, NULL, FALSE);
             UpdateMovement(delta);
@@ -169,12 +181,12 @@ void AddNPC(Position pos, Velocity vel, Size size, Personality pers, Mood mood, 
 bool CheckCollision(int i, int j){
     bool ret = false;
     if(positions[i].x <= positions[j].x + sizes[j].length && positions[i].y <= positions[j].y + sizes[j].height &&
-       positions[i].x + sizes[i].length > positions[j].x && positions[i].y + sizes[i].height > positions[j].y){
+    positions[i].x + sizes[i].length > positions[j].x && positions[i].y + sizes[i].height > positions[j].y){
 
         float overlapX = std::min(positions[i].x + sizes[i].length, positions[j].x + sizes[j].length) - 
-                         std::max(positions[i].x, positions[j].x);
+                        std::max(positions[i].x, positions[j].x);
         float overlapY = std::min(positions[i].y + sizes[i].height, positions[j].y + sizes[j].height) - 
-                         std::max(positions[i].y, positions[j].y);
+                        std::max(positions[i].y, positions[j].y);
 
         if(overlapX < overlapY){
             float sep = (overlapX + 1.0f) * 0.5f;
@@ -266,7 +278,7 @@ void UpdatePathfinding(float delta){
         float dx = positions[j].x - positions[i].x;
         float dy = positions[j].y - positions[i].y;
         float longueur = sqrt(dx*dx + dy*dy);
-        if(moods[i].soci > 0.2f){                           // Si on a encore de la batterie sociale
+        if(moods[i].soci > 0.5f){                           // Si on a encore de la batterie sociale
             if(longueur > 50.0f){                           // Et qu'on n'est pas assez proche du plus proche
                 velocities[i].vx = (dx / longueur) * 40.0f; // On se rapproche à une vitesse de 40f
                 velocities[i].vy = (dy / longueur) * 40.0f;
@@ -276,10 +288,19 @@ void UpdatePathfinding(float delta){
                 velocities[i].vy = 0.0f;
                 currentTasks[i].activities[0].talk = true;
             }
-        } else {                                            // Si on n'a plus de batterie sociale
+        } else if (moods[i].soci < 0.2f && longueur < 150.0f){                                            // Si on n'a plus de batterie sociale
             velocities[i].vx = (dx / longueur) * -80.0f;    // ON FUIT
             velocities[i].vy = (dy / longueur) * -80.0f;
             currentTasks[i].activities[0].talk = false;
+        } else {
+            if(longueur > 50.0f){
+                Wander(i, delta);
+                currentTasks[i].activities[0].talk = false;
+            } else {
+                velocities[i].vx = 0.0f;
+                velocities[i].vy = 0.0f;
+                currentTasks[i].activities[0].talk = true;
+            }
         }
         SociabilityChange(i, delta);
     }
@@ -324,16 +345,37 @@ int FindClosest(int i){
     return closest;
 }
 
+float GetDistance(int i, int j){
+    float dx = positions[j].x - positions[i].x;
+    float dy = positions[j].y - positions[i].y;
+    return sqrt(dx*dx + dy*dy);
+}
+
 void SociabilityChange(int i, float delta){
     float extraversion = personalities[i].extr;
 
     if(currentTasks[i].activities[0].talk){
-        moods[i].soci -= 0.01f * delta;      // 0.1f devrait être différent selon les traits des NPC (débit de batterie sociale)
-        moods[i].soci = std::clamp(moods[i].soci, 0.0f, personalities[i].extr); // On réduit la batterie sociale en restant entre 0 et le seuil max
-    } else {                                                                    // Si on est en mouvement
-        if(moods[i].soci < personalities[i].extr){                              // Si la batterie sociale est en dessous du seuil max
-            moods[i].soci += 0.01f * delta;
-            moods[i].soci = std::clamp(moods[i].soci, 0.0f, personalities[i].extr); // On augmente la batterie en restant entre 0 et le seuil max
+        moods[i].soci -= 0.1f * personalities[i].extr * delta;
+        moods[i].soci = std::clamp(moods[i].soci, 0.0f, personalities[i].extr);
+    } else {
+        if(moods[i].soci < personalities[i].extr && GetDistance(i, FindClosest(i)) > 100.0f){
+            moods[i].soci += 0.1f * personalities[i].extr * delta;
+            moods[i].soci = std::clamp(moods[i].soci, 0.0f, personalities[i].extr);
         }
+    }
+}
+
+void Wander(int i, float delta){
+    velocities[i].vx += 1000.0f * delta * random_positive_negative_percent(rng);
+    velocities[i].vy += 1000.0f * delta * random_positive_negative_percent(rng);
+
+    float speed = sqrt(velocities[i].vx * velocities[i].vx + velocities[i].vy * velocities[i].vy);
+
+    if(speed > 50.0f) {
+        velocities[i].vx = (velocities[i].vx / speed) * 50.0f;
+        velocities[i].vy = (velocities[i].vy / speed) * 50.0f;
+    } else if(speed < 20.0f){
+        velocities[i].vx = (velocities[i].vx / speed) * 20.0f;
+        velocities[i].vy = (velocities[i].vy / speed) * 20.0f;
     }
 }
